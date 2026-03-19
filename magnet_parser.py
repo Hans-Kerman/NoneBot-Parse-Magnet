@@ -8,7 +8,7 @@ from nonebot.adapters.onebot.v11 import Bot,Message
 from nonebot.adapters.onebot.v11 import PrivateMessageEvent
 from nonebot.rule import Rule
 
-from parse_mag import extract_magnet_links
+from .parse_mag import extract_magnet_links
 
 current_dir = Path(__file__).parent
 magnet_dir = current_dir / "magnet"
