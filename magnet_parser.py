@@ -4,7 +4,7 @@ from typing import TextIO
 
 from nonebot import on_message
 
-from nonebot.adapters.onebot.v11 import Bot,Message
+from nonebot.adapters.onebot.v11 import Bot
 from nonebot.adapters.onebot.v11 import PrivateMessageEvent
 from nonebot.rule import Rule
 
@@ -54,19 +54,53 @@ async def parse_forward_nodes(bot:Bot, nodes: list, f: TextIO):
     nodes 结构通常是: [{"content": Message, "sender": {...}}, ...]
     """
     for node in nodes:
-        content = node["content"]
+        content = node.get("content") or node.get("message")
 
-        if not isinstance(content, Message):
-            content = Message(content)
+        if not content:
+            continue
+
+        if isinstance(content, str):
+            parse_mag(content, f)
+            continue
+            
+        if isinstance(content, dict) or not hasattr(content, '__iter__'):
+            content = [content]
 
         for seg in content:
-            if seg.type == "forward":
-                inner_res_id = seg.data["id"]
-                inner_data = await bot.get_forward_msg(id=inner_res_id)
-                await parse_forward_nodes(bot, inner_data["messages"], f)
-            elif seg.type == "text":
-                text_data = seg.data["text"]
-                parse_mag(text_data, f)
+            if isinstance(seg, dict):
+                seg_type = seg.get("type")
+                seg_data = seg.get("data", {})
+            else:
+                seg_type = getattr(seg, "type", None)
+                seg_data = getattr(seg, "data", {})
+
+            if seg_type == "forward":
+                # 在某些 Onebot 实现中（例如 go-cqhttp、NapCat 等），内层的合并转发消息
+                # 不能通过 `get_forward_msg` 再次根据 ID 获取，而是直接附带了完整节点数据
+                if "content" in seg_data:
+                    # 如果有内层节点的实际数据，通常是一个新的 list
+                    inner_content = seg_data["content"]
+                    if isinstance(inner_content, list):
+                        # 兼容不同实现包装：有些实现直接把节点塞在 content，有些包在 message
+                        inner_nodes = [{"message": m} for m in inner_content] if inner_content and not isinstance(inner_content[0], dict) else inner_content
+                        # 为了统一递归处理结构，把它包装成 node 列表的样子
+                        if inner_content and isinstance(inner_content[0], dict) and "message" not in inner_content[0] and "content" not in inner_content[0] and "type" in inner_content[0]:
+                           # 如果直接是 segment list，包装一下
+                           inner_nodes = [{"message": inner_content}]
+                        await parse_forward_nodes(bot, inner_nodes, f)
+                else:
+                    # 如果没有数据只有 ID，尝试获取。部分客户端可能会报错 1200，抓取并跳过
+                    inner_res_id = seg_data.get("id")
+                    if inner_res_id:
+                        try:
+                            inner_data = await bot.get_forward_msg(id=inner_res_id)
+                            await parse_forward_nodes(bot, inner_data.get("messages", []), f)
+                        except Exception as e:
+                            print(f"获取内层合并转发消息失败: {e}")
+            elif seg_type == "text":
+                text_data = seg_data.get("text", "")
+                if text_data:
+                    parse_mag(text_data, f)
 
 def parse_mag(text: str, f: TextIO):
     for mag in extract_magnet_links(text):
