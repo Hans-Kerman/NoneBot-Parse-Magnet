@@ -38,15 +38,27 @@ async def handle_forward(bot: Bot, event: PrivateMessageEvent):
     with open(filename, 'a', encoding='utf-8') as f:
         for seg in forward_segs:
             res_id = seg.data["id"]
-            forward_data = await bot.get_forward_msg(id=res_id)
-            await parse_forward_nodes(bot, forward_data["messages"], f)
+            try:
+                forward_data = await bot.get_forward_msg(id=res_id)
+                await parse_forward_nodes(bot, forward_data.get("messages", []), f)
+            except Exception as e:
+                print(f"获取外层合并转发消息失败: {e}")
     
-    await bot.call_api(
-        "upload_private_file",
-        user_id=event.user_id,
-        file=str(filename.resolve()),
-        name="test.txt"
-    )
+    # 防止因未提取到任何磁力链接生成空文件，导致调用 upload_private_file 报错 "rich media transfer failed"
+    if filename.stat().st_size == 0:
+        filename.unlink()  # 删除空文件
+        await bot.send(event, "未在这条合并转发消息中找到任何磁力链接。")
+        return
+
+    try:
+        await bot.call_api(
+            "upload_private_file",
+            user_id=event.user_id,
+            file=str(filename.resolve()),
+            name="test.txt"
+        )
+    except Exception as e:
+        await bot.send(event, f"文件发送失败（可能受到框架/平台限制）：{e}")
 
 async def parse_forward_nodes(bot:Bot, nodes: list, f: TextIO):
     """
